@@ -1,0 +1,254 @@
+# -*- coding: utf-8 -*-
+"""
+# libraries
+"""
+
+from torch import nn
+import torch
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device
+
+"""# model
+
+## Generator
+"""
+
+class Generator(nn.Module):
+  def __init__(self):
+    super().__init__()
+    self.model = nn.Sequential(
+        nn.Flatten(),
+        nn.Linear(196608 , 10240),
+        nn.ReLU(),
+        nn.Linear(10240 ,512 ),
+        nn.ReLU(),
+        nn.Linear(512 , 256),
+        nn.ReLU(),
+        nn.Linear(256 , 128),
+        nn.ReLU(),
+        nn.Linear(128 , 64),
+        nn.ReLU(),
+        nn.Linear(64 , 30),
+        nn.ReLU(),
+        nn.Linear(30 , 19),
+        nn.ReLU()
+    )
+  def forward(self , x):
+    return self.model(x)
+
+"""## Discriminator"""
+
+class Discriminator(nn.Module):
+  def __init__(self , input_dim = 19):
+    super().__init__()
+    self.input_dim = input_dim
+    self.discriminator = nn.Sequential(
+        nn.Linear(self.input_dim , 19),
+        nn.ReLU(),
+        nn.Linear(self.input_dim , 19),
+        nn.ReLU(),
+        nn.Linear(19 , 10),
+        nn.ReLU(),
+        nn.Linear(10 , 1),
+        nn.Sigmoid()
+    )
+
+  def forward(self , x):
+    return self.discriminator(x)
+
+"""# Get Image data"""
+
+from google.colab import drive
+drive.mount('/content/drive')
+
+! pip install rarfile
+
+import requests
+import zipfile
+from pathlib import Path
+import rarfile
+
+rar_path = '/content/drive/My Drive/OnAcademy_final_project/trainA.rar'
+
+#with rarfile.RarFile(rar_path , 'r') as rar:
+#  rar.extractall(path = '/content/drive/My Drive/OnAcademy_final_project/images')
+
+import random
+from PIL import Image
+import os
+
+image_dir = '/content/drive/My Drive/OnAcademy_final_project/images'
+os.listdir(image_dir)
+
+file_path = os.path.join(image_dir , 'trainA')
+file_path
+
+os.listdir(file_path)[1]
+
+x1 = os.path.join(file_path , os.listdir(file_path)[1])
+image = Image.open(x1)
+image.show()
+
+image_path_list = os.listdir(file_path)
+random_image_path = random.choice(image_path_list)
+img = Image.open(os.path.join(file_path , random_image_path))
+img
+
+print(img.width , '    ' , img.height)
+
+from torch.utils.data import DataLoader
+from torchvision import datasets , transforms
+
+data_transform = transforms.Compose((
+    transforms.Resize(size=(256,256)),
+    transforms.ToTensor()
+    ))
+
+from torch.utils.data import Dataset
+
+class UnlabeledImageDataset(Dataset):
+  def __init__(self , root_dir , transform):
+    self.root_dir = root_dir
+    self.transform = transform
+    self.image_list = os.listdir(root_dir)
+
+  def __len__(self):
+    return len(self.image_list)
+
+  def __getitem__(self , idx):
+    img_name = self.image_list[idx]
+    img_path = os.path.join(self.root_dir , img_name)
+    image = Image.open(img_path).convert('RGB')
+    if self.transform:
+      image = self.transform(image)
+
+    return image
+
+dataset = UnlabeledImageDataset(file_path , transform=data_transform)
+
+train_dataloader = DataLoader(dataset=dataset , batch_size=32 , shuffle = True)
+
+train_dataloader
+
+#next(iter(train_dataloader))
+
+"""# Get text data"""
+
+data_saadi = open('/content/drive/MyDrive/OnAcademy_final_project/poetry_saadi.txt').read()
+data_rumi = open('/content/drive/MyDrive/OnAcademy_final_project/poetry_rumi.txt').read()
+corpus_saadi = data_saadi.lower().split("\n")
+corpus_rumi = data_rumi.lower().split("\n")
+
+corpus = corpus_saadi+ corpus_rumi
+
+from transformers import AutoTokenizer
+checkpoint = 'parsi-ai-nlpclass/ParsBERT-nli-FarsTail-FarSick'
+tokenizer = AutoTokenizer.from_pretrained(checkpoint)
+tokenizer
+
+inputs = tokenizer(corpus , padding=True , truncation=True , max_length=40 , return_tensors='pt' , add_special_tokens=True)
+inputs['input_ids'][0]
+
+"""# simple test"""
+
+img_1 = next(iter(train_dataloader))
+img_1 = img_1[4].unsqueeze(dim=0)
+
+img_1.shape
+
+a = 3*256*256
+linear_model = Generator()
+
+linear_model.to(device)
+
+linear_model.eval()
+with torch.inference_mode():
+  pred_linear_model = linear_model(img_1.to(device))
+
+torch.round(pred_linear_model *100)
+
+discriminator = Discriminator().to(device)
+
+fake = discriminator(torch.round(pred_linear_model *100))
+
+fake
+
+inputs['input_ids'][1236]
+
+b = inputs['input_ids'][1236]+3
+
+real = discriminator(b.to(torch.float32))
+
+real
+
+
+
+#farda train ro misaxam v yek nmone migiram
+
+"""# train"""
+
+num_epoch = 20
+i = 5
+generator = Generator()
+discriminator = Discriminator()
+
+generator , discriminator = generator.to(device) , discriminator.to(device)
+
+"""## Loss"""
+
+generator_criterion = nn.BCELoss().to(device)
+discriminator_criterion = nn.BCELoss().to(device)
+
+"""## Optimizer"""
+
+generator_optimizer = torch.optim.Adam(generator.parameters() , lr=0.0005)
+discriminator_optimizer = torch.optim.Adam(discriminator.parameters() , lr=0.0005)
+
+"""## Train loop"""
+
+for epoch in range(num_epoch):
+  for data in train_dataloader:
+    images = data
+    images = images.to(device)
+
+    fake_text = generator(images)
+
+    fake_probs = discriminator(fake_text.detach())
+    input = inputs['input_ids'][i].to(device)
+    real_probs = discriminator(input.to(torch.float32))
+
+    i = random.randint(4 , len(inputs['input_ids']))
+
+    loss_real = discriminator_criterion(real_probs , torch.ones_like(real_probs))
+    loss_fake = discriminator_criterion(fake_probs , torch.zeros_like(fake_probs))
+
+    loss_discriminator = (loss_real + loss_fake)/2
+    discriminator_optimizer.zero_grad()
+    loss_discriminator.backward()
+    discriminator_optimizer.step()
+
+    fake_probs = discriminator(fake_text)
+    loss_generator = generator_criterion(fake_probs , torch.ones_like(fake_probs))
+    generator_optimizer.zero_grad()
+    loss_generator.backward()
+    generator_optimizer.step()
+
+  if epoch % 5 == 0:
+    print(f'epoch: {epoch} , discriminator loss : {loss_discriminator.item()} , gen loss : {loss_generator.item()}')
+
+test_img = next(iter(train_dataloader))
+
+
+fake_text = generator(test_img[6].unsqueeze(dim=0))
+
+fake_text
+
+fake_test = fake_text.to(torch.int).unsqueeze(dim=0).tolist()
+
+import numpy as np
+fake_test = np.array(fake_test).flatten().tolist()
+
+decoded_text = tokenizer.decode(fake_test)
+decoded_text
+
